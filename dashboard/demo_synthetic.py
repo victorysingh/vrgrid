@@ -9,13 +9,17 @@ Renders:
 - Ring boundaries from configs/schedule_5_10_20_40.yaml
 """
 
-import rerun as rr
 import numpy as np
+import rerun as rr
 import yaml
 
+from vrgrid.grid.schedule import CONFIG_DIR
 
-def load_schedule(config_path: str = "configs/schedule_5_10_20_40.yaml") -> dict:
-    with open(config_path, "r") as f:
+
+def load_schedule(config_path=None) -> dict:
+    """Raw schedule yaml as a dict. Path resolved from the package, not the CWD."""
+    path = config_path or CONFIG_DIR / "schedule_5_10_20_40.yaml"
+    with open(path, "r") as f:
         return yaml.safe_load(f)
 
 
@@ -203,8 +207,10 @@ def main():
     rr.log("vehicle", rr.Points3D([[0, 0, 1.73]], colors=[0, 255, 0], radii=0.3,
                                    labels=["Vehicle (HDL-64E @ 1.73m)"]))
 
-    # Log blind cone (from config)
-    blind_cone = 3.74
+    # Log blind cone -- radius from configs/thresholds.yaml (math §1.4 eq 5:
+    # r = h_s / tan|phi_min| = 1.73 / tan(24.8) = 3.74 m), not hardcoded.
+    with open(CONFIG_DIR / "thresholds.yaml") as f:
+        blind_cone = float(yaml.safe_load(f)["sensor"]["blind_cone_m"])
     theta = np.linspace(-np.pi, np.pi, 50)
     xs = blind_cone * np.cos(theta)
     ys = blind_cone * np.sin(theta)
@@ -213,7 +219,7 @@ def main():
         cone_strip.append([[xs[i], ys[i], 0], [xs[i+1], ys[i+1], 0]])
     cone_strip = np.array(cone_strip, dtype=np.float32)
     rr.log("sensor/blind_cone", rr.LineStrips3D(cone_strip, colors=[255, 0, 0], radii=0.05,
-                                                 labels=["Blind cone (3.74m)"]))
+                                                 labels=[f"Blind cone ({blind_cone:.2f} m)"]))
 
     print("Dashboard running. Check Rerun viewer.")
     print("Views: 'map/classes' (top-down), 'map/points' (3D), 'rings/*' (boundaries)")

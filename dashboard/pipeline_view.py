@@ -29,10 +29,50 @@ they track the vehicle. Points are world-frame and accumulate on the timeline.
 
 import numpy as np
 import rerun as rr
+import yaml
 
-from .demo_synthetic import class_to_color, load_schedule
+from vrgrid.grid.schedule import CONFIG_DIR
+from vrgrid.grid.schedule import load as load_schedule
+
+from .demo_synthetic import class_to_color
 
 _CLASS_LUT = np.array([class_to_color(c) for c in range(-1, 19)], dtype=np.uint8)  # index c+1
+
+
+def blind_cone_radius_m() -> float:
+    """Blind-cone radius, read from configs/thresholds.yaml -- NOT hardcoded.
+
+    Master v4 §3.x / math §1.4 eq (5): r_blind = h_s / tan|phi_min| =
+    1.73 / tan(24.8 deg) = 3.74 m. (The earlier plan assumed 1-2 m.)
+    """
+    with open(CONFIG_DIR / "thresholds.yaml") as f:
+        return float(yaml.safe_load(f)["sensor"]["blind_cone_m"])
+
+
+def available_schedules() -> list[str]:
+    """Schedule names discovered from configs/schedule_*.yaml (no hardcoding)."""
+    return sorted(
+        p.stem.removeprefix("schedule_") for p in CONFIG_DIR.glob("schedule_*.yaml")
+    )
+
+
+def schedule_legend_markdown(active: str) -> str:
+    """Table of every available schedule and its ring boundaries, read from the
+    config files. The active one is marked. This is the (display-only) schedule
+    selector -- switching is not wired because ring data is not in the pipeline
+    yet; `--schedule <name>` on vrgrid.dash / vrgrid.run picks it."""
+    lines = [
+        "**Schedule selector** (display only -- `--schedule <name>` picks it)",
+        "",
+        "| schedule | rings: half-width m / cell cm | cells | MB |",
+        "|---|---|---|---|",
+    ]
+    for name in available_schedules():
+        s = load_schedule(name)
+        rings = ", ".join(f"{r.half_width_m:g}/{r.cell_m * 100:g}" for r in s.rings)
+        mark = " **(active)**" if name == active else ""
+        lines.append(f"| `{name}`{mark} | {rings} | {s.total_cells:,} | {s.total_cells * 12 / 1e6:.2f} |")
+    return "\n".join(lines)
 
 # Highlight for moving points (motion layer + the world/ghosts overlay).
 # Okabe & Ito (2008) "reddish purple" -- chosen because it is the one hue that
@@ -149,7 +189,7 @@ def get_display_points(frame, ghost_removal: bool, color_by: str = "class",
 class PipelineView:
     def __init__(self, schedule, spawn: bool = False, save_path: str | None = None,
                  color_by: str = "class", ghost_removal: bool = True,
-                 palette: str = "semantickitti", schedule_yaml: str | None = None):
+                 palette: str = "semantickitti"):
         self.color_by = color_by
         self.ghost_removal = ghost_removal
         self.palette = palette
@@ -170,26 +210,31 @@ class PipelineView:
         )
         rr.log("legend", rr.TextDocument(legend_markdown(palette),
                                          media_type=rr.MediaType.MARKDOWN), static=True)
-        self._log_rings(load_schedule() if schedule_yaml is None else load_schedule(schedule_yaml))
-        self._log_blind_cone()
+        rr.log("schedules", rr.TextDocument(schedule_legend_markdown(schedule.name),
+                                            media_type=rr.MediaType.MARKDOWN), static=True)
+        self._log_rings(schedule)
+        self._log_blind_cone(blind_cone_radius_m())
 
-    def _log_rings(self, sched: dict):
-        for ring in sched.get("rings", []):
-            hw = ring["half_width_m"]
+    def _log_rings(self, schedule):
+        """Ring boundary circles, straight from the passed Schedule -- the ring
+        sizes come from configs/schedule_*.yaml, nothing here is hardcoded."""
+        for ring in schedule.rings:
+            hw = ring.half_width_m
             th = np.linspace(0, 2 * np.pi, 129)
             strip = np.stack([hw * np.cos(th), hw * np.sin(th), np.zeros_like(th)], axis=1)
             rr.log(
-                f"world/vehicle/rings/ring_{ring['ring']}",
+                f"world/vehicle/rings/ring_{ring.ring}_{ring.cell_m * 100:g}cm",
                 rr.LineStrips3D([strip.astype(np.float32)], colors=[220, 220, 220], radii=0.04),
                 static=True,
             )
 
-    def _log_blind_cone(self, radius_m: float = 3.74):
+    def _log_blind_cone(self, radius_m: float):
         th = np.linspace(0, 2 * np.pi, 65)
         strip = np.stack([radius_m * np.cos(th), radius_m * np.sin(th), np.zeros_like(th)], axis=1)
         rr.log(
             "world/vehicle/blind_cone",
-            rr.LineStrips3D([strip.astype(np.float32)], colors=[230, 60, 60], radii=0.05),
+            rr.LineStrips3D([strip.astype(np.float32)], colors=[230, 60, 60], radii=0.05,
+                            labels=[f"blind cone {radius_m:.2f} m (unknown)"]),
             static=True,
         )
 
